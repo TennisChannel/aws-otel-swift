@@ -60,6 +60,45 @@ final class AwsKSCrashInstrumentationTests: XCTestCase {
     XCTAssertEqual(AwsKSCrashInstrumentation.maxStackTraceBytes, 25 * 1024)
   }
 
+  // TC PATCH
+  private func terminationReport(reason: String, userPerceptible: Any) -> [String: Any] {
+    return [
+      "report": ["monitor_id": "Termination"],
+      "system": ["application_stats": ["app_transition_state": "background", "user_perceptible": userPerceptible]],
+      "crash": ["error": ["type": "termination", "termination_reason": reason]]
+    ]
+  }
+
+  func testSkipsUnexplainedTerminationWhenNotPerceptible() {
+    XCTAssertTrue(AwsKSCrashInstrumentation.isUnperceivedUnexplainedTermination(
+      terminationReport(reason: "unexplained", userPerceptible: false)))
+    XCTAssertTrue(AwsKSCrashInstrumentation.isUnperceivedUnexplainedTermination(
+      terminationReport(reason: "unexplained", userPerceptible: NSNumber(value: 0))))
+  }
+
+  func testKeepsUnexplainedTerminationWhenPerceptible() {
+    XCTAssertFalse(AwsKSCrashInstrumentation.isUnperceivedUnexplainedTermination(
+      terminationReport(reason: "unexplained", userPerceptible: true)))
+  }
+
+  func testKeepsResourceTerminations() {
+    for reason in ["memory_limit", "memory_pressure", "thermal", "cpu", "low_battery"] {
+      XCTAssertFalse(AwsKSCrashInstrumentation.isUnperceivedUnexplainedTermination(
+        terminationReport(reason: reason, userPerceptible: false)), reason)
+    }
+  }
+
+  func testKeepsCrashesAndIncompleteReports() {
+    let signalCrash: [String: Any] = [
+      "system": ["application_stats": ["user_perceptible": true]],
+      "crash": ["error": ["type": "signal", "signal": ["signal": 6, "name": "SIGABRT"]]]
+    ]
+    XCTAssertFalse(AwsKSCrashInstrumentation.isUnperceivedUnexplainedTermination(signalCrash))
+    XCTAssertFalse(AwsKSCrashInstrumentation.isUnperceivedUnexplainedTermination(
+      ["crash": ["error": ["termination_reason": "unexplained"]]]))
+    XCTAssertFalse(AwsKSCrashInstrumentation.isUnperceivedUnexplainedTermination([:]))
+  }
+
   func testExtractCrashMessageWithExceptionType() {
     let stackTrace = """
     Exception Type:  EXC_BREAKPOINT (SIGTRAP)
