@@ -33,7 +33,7 @@
 >
 > | Branch | Tag | Upstream base |
 > | --- | --- | --- |
-> | [`tc/1.1.0`](https://github.com/TennisChannel/aws-otel-swift/tree/tc/1.1.0) | `1.1.0-tc.1` | `1.1.0` (`7ab69dc`) |
+> | [`tc/1.1.0`](https://github.com/TennisChannel/aws-otel-swift/tree/tc/1.1.0) | `1.1.0-tc.2` | `1.1.0` (`7ab69dc`) |
 >
 > `main` mirrors upstream `main` plus this notice and is not used by anything.
 > `TC-FORK.md` on the `tc/*` branches has the upgrade steps.
