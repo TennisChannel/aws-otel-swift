@@ -1,3 +1,49 @@
+> [!WARNING]
+> ## This is NOT the official aws-otel-swift. Do not depend on it.
+>
+> This is a **Tennis Channel fork** of
+> [aws-observability/aws-otel-swift](https://github.com/aws-observability/aws-otel-swift),
+> kept for one app (`apps/tc-mobile` in TennisChannel/TennisChannel). It is not
+> maintained by AWS, not supported, and not tracking upstream beyond the versions
+> our app uses. **If you are not Tennis Channel, use the upstream repository.**
+>
+> ### Why it exists
+>
+> aws-otel-swift 1.1.0 was built and tested against KSCrash 2.4.0, but its
+> manifest allows any KSCrash 2.x, so apps resolve **KSCrash 2.6**. KSCrash 2.6
+> added a **Termination monitor**, on by default. On the next launch it writes a
+> threadless SIGKILL report for any previous run that ended without a clean exit
+> and was not a crash, hang, OS/app upgrade, reboot or resource kill.
+>
+> iOS never notifies a suspended app before killing it. So **every app-switcher
+> swipe and every time iOS reclaims a suspended app** is forwarded to CloudWatch
+> RUM as a crash, `0 (SIGKILL) detected at unknown location`. For us that was
+> **166 of 179 "crashes" (93%) over 30 days**, none of them visible to the user.
+> Upstream has no option to filter these or change KSCrash's monitors, and
+> installing KSCrash separately makes the SDK give up on crash reporting entirely.
+>
+> ### What is different from upstream
+>
+> One commit on top of each upstream tag, marked `TC PATCH`:
+> `AwsKSCrashInstrumentation.processStoredCrashes` drops reports whose
+> `crash.error.termination_reason` is `"unexplained"` and whose
+> `system.application_stats.user_perceptible` is false. Memory, thermal, CPU and
+> battery terminations, foreground terminations and real crashes are still
+> reported. Nothing else is changed.
+>
+> | Branch | Tag | Upstream base |
+> | --- | --- | --- |
+> | [`tc/1.1.0`](https://github.com/TennisChannel/aws-otel-swift/tree/tc/1.1.0) | `1.1.0-tc.2` | `1.1.0` (`7ab69dc`) |
+>
+> `main` mirrors upstream `main` plus this notice and is not used by anything.
+> `TC-FORK.md` on the `tc/*` branches has the upgrade steps.
+>
+> ### When it goes away
+>
+> As soon as upstream aws-otel-swift filters these reports or exposes KSCrash's
+> monitor configuration, `apps/tc-mobile` switches back to upstream and this
+> fork is archived.
+
 # AWS Distro for OpenTelemetry for Swift
 
 AWS Distro for OpenTelemetry (ADOT) Swift is a redistribution of the [OpenTelemetry Swift](https://github.com/open-telemetry/opentelemetry-swift), configured with in-house instrumentations to use with [AWS CloudWatch Real User Monitoring](https://docs.aws.amazon.com/AmazonCloudWatch/latest/monitoring/CloudWatch-RUM.html).
