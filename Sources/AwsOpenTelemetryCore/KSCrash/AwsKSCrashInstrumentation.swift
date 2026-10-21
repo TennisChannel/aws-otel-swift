@@ -173,14 +173,34 @@ public class AwsKSCrashInstrumentation: CrashProtocol {
         continue
       }
 
-      // Report crash as log event
-      reportCrash(crashReport: crashReport)
+      // TC PATCH: see isUnperceivedUnexplainedTermination.
+      if isUnperceivedUnexplainedTermination(crashReport.value) {
+        AwsInternalLogger.debug("AwsKSCrashInstrumentation skipped unexplained background termination \(reportID)")
+      } else {
+        // Report crash as log event
+        reportCrash(crashReport: crashReport)
+      }
 
       // Delete processed report
       reportStore.deleteReport(with: id)
     }
 
     AwsInternalLogger.debug("AwsKSCrashInstrumentation processed \(reportIDs.count) stored crashes")
+  }
+
+  /// TC PATCH. KSCrash 2.6's Termination monitor injects a SIGKILL report, with no threads, for any
+  /// previous run that did not exit cleanly and was not a crash, hang, OS/app upgrade, reboot or
+  /// resource kill. iOS never tells a suspended app it is being killed, so every app-switcher swipe and
+  /// every reclaim of a suspended app lands here as `termination_reason: "unexplained"`. Drop those
+  /// when the app was not user-perceptible; keep memory/thermal/CPU/battery and foreground terminations.
+  static func isUnperceivedUnexplainedTermination(_ rawCrash: [String: Any]) -> Bool {
+    guard let error = (rawCrash["crash"] as? [String: Any])?["error"] as? [String: Any],
+          error["termination_reason"] as? String == "unexplained",
+          let appStats = (rawCrash["system"] as? [String: Any])?["application_stats"] as? [String: Any],
+          let userPerceptible = appStats["user_perceptible"] as? Bool else {
+      return false
+    }
+    return !userPerceptible
   }
 
   /// Report a KSCrash report in Apple format
