@@ -144,13 +144,20 @@ public class AwsTelemetryConfigBuilder {
 @objc public class TelemetryFeature: NSObject, Codable {
   public var enabled: Bool
 
+  /// TC PATCH. `network` only: the URLSession delegate classes to instrument, by Objective-C
+  /// runtime name. When nil, URLSessionInstrumentation finds them by scanning every class in the
+  /// process (`objc_getClassList`, ~78k on iOS 26) from `+load`, which held up every cold start
+  /// by 400-700 ms before `main`. Names that do not resolve are skipped.
+  public var delegateClasses: [String]?
+
   /**
    * Initializes a telemetry feature.
    *
    * @param enabled Whether the feature is enabled (defaults to true)
    */
-  public init(enabled: Bool = true) {
+  public init(enabled: Bool = true, delegateClasses: [String]? = nil) {
     self.enabled = enabled
+    self.delegateClasses = delegateClasses
     super.init()
   }
 }

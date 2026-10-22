@@ -40,13 +40,18 @@ public struct AwsURLSessionConfig {
   /// Optional export overrides for custom telemetry endpoints
   public let exportOverride: AwsExportOverride?
 
+  /// TC PATCH: see `TelemetryFeature.delegateClasses`.
+  public let delegateClassNames: [String]?
+
   /// Creates a new URLSession instrumentation configuration
   /// - Parameters:
   ///   - region: AWS region for building default RUM endpoints
   ///   - exportOverride: Optional export overrides for custom telemetry endpoints
-  public init(region: String, exportOverride: AwsExportOverride? = nil) {
+  ///   - delegateClassNames: URLSession delegate classes to instrument; nil scans every class
+  public init(region: String, exportOverride: AwsExportOverride? = nil, delegateClassNames: [String]? = nil) {
     self.region = region
     self.exportOverride = exportOverride
+    self.delegateClassNames = delegateClassNames
   }
 }
 

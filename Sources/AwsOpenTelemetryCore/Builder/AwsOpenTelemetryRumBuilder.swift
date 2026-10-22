@@ -183,7 +183,9 @@ public class AwsOpenTelemetryRumBuilder {
 
     // Network (URLSession)
     if telemetry.network?.enabled == true {
-      let urlSessionConfig = AwsURLSessionConfig(region: config.aws.region, exportOverride: config.exportOverride)
+      let urlSessionConfig = AwsURLSessionConfig(region: config.aws.region,
+                                                 exportOverride: config.exportOverride,
+                                                 delegateClassNames: telemetry.network?.delegateClasses)
       let urlSessionInstrumentation = AwsURLSessionInstrumentation(config: urlSessionConfig)
       urlSessionInstrumentation.apply()
     }

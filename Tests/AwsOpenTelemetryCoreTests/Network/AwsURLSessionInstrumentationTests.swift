@@ -81,6 +81,27 @@ final class AwsURLSessionInstrumentationTests: XCTestCase {
     XCTAssertFalse(instrumentation.shouldExcludeURL(mutableRequest), "Request with nil URL should not be excluded")
   }
 
+  // TC PATCH
+  func testDelegateClassesDefaultToScanningEveryClass() {
+    let instrumentation = AwsURLSessionInstrumentation(config: AwsURLSessionConfig(region: "us-west-2"))
+    XCTAssertNil(instrumentation.delegateClasses)
+  }
+
+  // TC PATCH
+  func testDelegateClassesResolveByNameAndSkipUnknownNames() {
+    let config = AwsURLSessionConfig(region: "us-west-2", delegateClassNames: ["NSObject", "NoSuchClassAnywhere"])
+    let instrumentation = AwsURLSessionInstrumentation(config: config)
+    let classes = instrumentation.delegateClasses
+    XCTAssertEqual(classes?.count, 1)
+    XCTAssertTrue(classes?.first == NSObject.self)
+  }
+
+  // TC PATCH
+  func testEmptyDelegateClassesInstrumentNoDelegateClass() {
+    let config = AwsURLSessionConfig(region: "us-west-2", delegateClassNames: [])
+    XCTAssertEqual(AwsURLSessionInstrumentation(config: config).delegateClasses?.count, 0)
+  }
+
   func testPrefixMatching() {
     let config = AwsURLSessionConfig(region: "us-west-2")
     let instrumentation = AwsURLSessionInstrumentation(config: config)

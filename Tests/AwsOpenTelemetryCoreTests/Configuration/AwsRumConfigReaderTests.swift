@@ -318,6 +318,24 @@ final class AwsRumConfigReaderTests: XCTestCase {
     XCTAssertTrue(config.telemetry!.hang?.enabled ?? false)
   }
 
+  // TC PATCH
+  func testParseNetworkDelegateClasses() throws {
+    let jsonString = """
+    {
+      "aws": { "region": "\(region)", "rumAppMonitorId": "\(appMonitorId)" },
+      "telemetry": {
+        "network": { "enabled": true, "delegateClasses": ["RCTHTTPRequestHandler", "GCKNHTTPClient"] },
+        "crash": { "enabled": true }
+      }
+    }
+    """
+
+    let config = try AwsRumConfigReader.parseConfig(from: jsonString.data(using: .utf8)!)
+
+    XCTAssertEqual(config.telemetry?.network?.delegateClasses, ["RCTHTTPRequestHandler", "GCKNHTTPClient"])
+    XCTAssertNil(config.telemetry?.crash?.delegateClasses)
+  }
+
   func testLoadConfigWithPartialTelemetryOverrides() throws {
     let tempDir = FileManager.default.temporaryDirectory
     let tempFileURL = tempDir.appendingPathComponent("config_partial_telemetry.json")

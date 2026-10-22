@@ -59,11 +59,19 @@ public class AwsURLSessionInstrumentation {
     let urlSessionConfig = URLSessionInstrumentationConfiguration(
       shouldInstrument: { request in
         return !self.shouldExcludeURL(request)
-      }
+      },
+      // TC PATCH: see TelemetryFeature.delegateClasses.
+      delegateClassesToInstrument: delegateClasses
     )
     _ = URLSessionInstrumentation(configuration: urlSessionConfig)
 
     isApplied = true
+  }
+
+  /// TC PATCH. The configured delegate classes that exist in this process, or nil (scan every
+  /// class) when none were configured.
+  var delegateClasses: [AnyClass]? {
+    config.delegateClassNames?.compactMap { NSClassFromString($0) }
   }
 
   // MARK: - Private Helper Methods
