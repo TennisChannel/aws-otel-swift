@@ -25,7 +25,12 @@ keeps upstream behavior.
 
 `AwsKSCrashInstrumentation.processStoredCrashes` drops KSCrash reports whose
 `crash.error.termination_reason` is `"unexplained"` and whose
-`system.application_stats.user_perceptible` is false, marked `TC PATCH`.
+`system.application_stats.user_perceptible` is false, marked `TC PATCH`. A
+follow-up commit also drops unexplained reports still in `startup`/`launching`
+whose `task_role` is not `FOREGROUND_APPLICATION`: a process the system launched
+in the background and killed before it reached the foreground. KSCrash counts
+those states as perceptible because a tapped launch is; a tapped launch keeps the
+foreground role and still reports.
 
 KSCrash 2.6 added a Termination monitor, on by default, that writes a threadless
 SIGKILL report for any previous run that ended without a clean exit and was not

@@ -61,12 +61,35 @@ final class AwsKSCrashInstrumentationTests: XCTestCase {
   }
 
   // TC PATCH
-  private func terminationReport(reason: String, userPerceptible: Any) -> [String: Any] {
+  private func terminationReport(reason: String, userPerceptible: Any, state: String = "background",
+                                 taskRole: String? = "NONUI_APPLICATION") -> [String: Any] {
+    var appStats: [String: Any] = ["app_transition_state": state, "user_perceptible": userPerceptible]
+    appStats["task_role"] = taskRole
     return [
       "report": ["monitor_id": "Termination"],
-      "system": ["application_stats": ["app_transition_state": "background", "user_perceptible": userPerceptible]],
+      "system": ["application_stats": appStats],
       "crash": ["error": ["type": "termination", "termination_reason": reason]]
     ]
+  }
+
+  func testSkipsUnexplainedTerminationOfBackgroundLaunch() {
+    for state in ["startup", "launching"] {
+      for role in ["BACKGROUND_APPLICATION", "UNKNOWN"] {
+        XCTAssertTrue(AwsKSCrashInstrumentation.isUnperceivedUnexplainedTermination(
+          terminationReport(reason: "unexplained", userPerceptible: true, state: state, taskRole: role)), "\(state) \(role)")
+      }
+    }
+  }
+
+  func testKeepsUnexplainedTerminationOfForegroundLaunch() {
+    XCTAssertFalse(AwsKSCrashInstrumentation.isUnperceivedUnexplainedTermination(
+      terminationReport(reason: "unexplained", userPerceptible: true, state: "startup", taskRole: "FOREGROUND_APPLICATION")))
+    XCTAssertFalse(AwsKSCrashInstrumentation.isUnperceivedUnexplainedTermination(
+      terminationReport(reason: "unexplained", userPerceptible: true, state: "startup", taskRole: nil)))
+    XCTAssertFalse(AwsKSCrashInstrumentation.isUnperceivedUnexplainedTermination(
+      terminationReport(reason: "unexplained", userPerceptible: true, state: "active", taskRole: "BACKGROUND_APPLICATION")))
+    XCTAssertFalse(AwsKSCrashInstrumentation.isUnperceivedUnexplainedTermination(
+      terminationReport(reason: "memory_limit", userPerceptible: true, state: "startup", taskRole: "BACKGROUND_APPLICATION")))
   }
 
   func testSkipsUnexplainedTerminationWhenNotPerceptible() {
