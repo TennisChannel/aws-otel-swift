@@ -193,6 +193,10 @@ public class AwsKSCrashInstrumentation: CrashProtocol {
   /// resource kill. iOS never tells a suspended app it is being killed, so every app-switcher swipe and
   /// every reclaim of a suspended app lands here as `termination_reason: "unexplained"`. Drop those
   /// when the app was not user-perceptible; keep memory/thermal/CPU/battery and foreground terminations.
+  ///
+  /// KSCrash counts `startup`/`launching` as perceptible because a tapped launch is, so a process the
+  /// system launched in the background (task role not FOREGROUND_APPLICATION) and killed before it ever
+  /// reached the foreground is dropped too.
   static func isUnperceivedUnexplainedTermination(_ rawCrash: [String: Any]) -> Bool {
     guard let error = (rawCrash["crash"] as? [String: Any])?["error"] as? [String: Any],
           error["termination_reason"] as? String == "unexplained",
@@ -200,7 +204,12 @@ public class AwsKSCrashInstrumentation: CrashProtocol {
           let userPerceptible = appStats["user_perceptible"] as? Bool else {
       return false
     }
-    return !userPerceptible
+    if !userPerceptible {
+      return true
+    }
+    let preForeground = ["startup", "launching"].contains(appStats["app_transition_state"] as? String)
+    let taskRole = appStats["task_role"] as? String
+    return preForeground && taskRole != nil && taskRole != "FOREGROUND_APPLICATION"
   }
 
   /// Report a KSCrash report in Apple format
