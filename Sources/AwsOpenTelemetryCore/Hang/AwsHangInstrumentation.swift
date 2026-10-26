@@ -15,6 +15,9 @@
 
 import Foundation
 import OpenTelemetryApi
+#if canImport(UIKit) && !os(watchOS)
+  import UIKit
+#endif
 
 /// Instrumentation for detecting and reporting application hangs
 public class AwsHangInstrumentation {
@@ -25,6 +28,9 @@ public class AwsHangInstrumentation {
   let hangPredetectionThreshold: CFAbsoluteTime
   var _hangStart: CFAbsoluteTime?
   var _rawStackTrace: Data?
+  /// TC PATCH: see `appDidLeaveForeground`. Main thread only.
+  var isInForeground = true
+  var hangEnd: CFAbsoluteTime?
   let syncQueue = DispatchQueue(label: "\(AwsInstrumentationScopes.HANG).sync")
   let watchdogQueue = DispatchQueue(label: AwsInstrumentationScopes.HANG, qos: .userInitiated)
 
@@ -80,22 +86,86 @@ public class AwsHangInstrumentation {
       let now = CFAbsoluteTimeGetCurrent()
 
       if activity == CFRunLoopActivity.afterWaiting {
-        hangStart = now
+        runLoopDidWake(at: now)
       } else if activity == CFRunLoopActivity.beforeWaiting {
-        guard let hangStart else {
-          AwsInternalLogger.debug("Activity is BeforeWaiting without hangStart")
-          return
-        }
-        let hangDuration = now - hangStart
-        if hangDuration >= hangThreshold {
-          reportHang(startTime: hangStart, endTime: now)
-        }
-        self.hangStart = nil // if main thread is resolved, then there is no ongoing hang anymore
-        rawStackTrace = nil // if main thread is resolved, then any cached stack trace is no longer relevant
+        runLoopWillSleep(at: now)
       }
     }
 
     CFRunLoopAddObserver(CFRunLoopGetMain(), observer, CFRunLoopMode.commonModes)
+    observeForeground()
+  }
+
+  func runLoopDidWake(at now: CFAbsoluteTime) {
+    hangStart = isInForeground ? now : nil
+    hangEnd = nil
+  }
+
+  func runLoopWillSleep(at now: CFAbsoluteTime) {
+    guard let hangStart else {
+      AwsInternalLogger.debug("Activity is BeforeWaiting without hangStart")
+      return
+    }
+    let end = hangEnd ?? now
+    let hangDuration = end - hangStart
+    if hangDuration >= hangThreshold {
+      reportHang(startTime: hangStart, endTime: end)
+    }
+    self.hangStart = nil // if main thread is resolved, then there is no ongoing hang anymore
+    rawStackTrace = nil // if main thread is resolved, then any cached stack trace is no longer relevant
+    hangEnd = nil
+  }
+
+  /// TC PATCH. Only main-thread time spent in the foreground counts toward a hang. The run loop
+  /// pass that takes an app out of the foreground blocks in a FrontBoard scene-update wait, and a
+  /// backgrounded app (background audio, PiP, a background launch) keeps running passes nobody can
+  /// see; upstream reports both as hangs. Leaving the foreground ends the counted part of the
+  /// current pass, no pass starts counting while away, and returning starts counting again from
+  /// that moment.
+  func appDidLeaveForeground(at now: CFAbsoluteTime) {
+    isInForeground = false
+    if hangStart != nil, hangEnd == nil {
+      hangEnd = now
+    }
+  }
+
+  /// TC PATCH: see `appDidLeaveForeground`. Posted only on a return from the background, so it
+  /// always restarts the count: a pass blocked when the user left gets no resign notification
+  /// before the process is suspended, and would otherwise report the hours it spent suspended.
+  func appWillEnterForeground(at now: CFAbsoluteTime) {
+    isInForeground = true
+    hangStart = now
+    hangEnd = nil
+    rawStackTrace = nil
+  }
+
+  /// TC PATCH: see `appDidLeaveForeground`.
+  func appDidBecomeActive(at now: CFAbsoluteTime) {
+    isInForeground = true
+    if hangStart == nil || hangEnd != nil {
+      hangStart = now
+      hangEnd = nil
+      rawStackTrace = nil
+    }
+  }
+
+  /// TC PATCH: see `appDidLeaveForeground`. Observers run synchronously on the posting (main)
+  /// thread, inside the run loop pass, so the timestamps fall within the pass they cut.
+  func observeForeground() {
+    #if canImport(UIKit) && !os(watchOS)
+      let center = NotificationCenter.default
+      for name in [UIApplication.willResignActiveNotification, UIApplication.didEnterBackgroundNotification] {
+        _ = center.addObserver(forName: name, object: nil, queue: nil) { [weak self] _ in
+          self?.appDidLeaveForeground(at: CFAbsoluteTimeGetCurrent())
+        }
+      }
+      _ = center.addObserver(forName: UIApplication.willEnterForegroundNotification, object: nil, queue: nil) { [weak self] _ in
+        self?.appWillEnterForeground(at: CFAbsoluteTimeGetCurrent())
+      }
+      _ = center.addObserver(forName: UIApplication.didBecomeActiveNotification, object: nil, queue: nil) { [weak self] _ in
+        self?.appDidBecomeActive(at: CFAbsoluteTimeGetCurrent())
+      }
+    #endif
   }
 
   /// We need to use the "background ping" strategy to preemptively collect the live stack

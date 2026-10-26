@@ -41,6 +41,22 @@ aws-otel-swift 1.1.0 was built against KSCrash 2.4.0, which predates the
 monitor, but allows any 2.x, so apps resolve 2.6 and forward these as
 `device.crash`.
 
+## Patch: foreground-only hangs
+
+`AwsHangInstrumentation` counts main-thread time toward a hang only while the
+app is in the foreground, marked `TC PATCH`. `willResignActive` and
+`didEnterBackground` end the counted part of the current run loop pass, no pass
+starts counting while the app is away, and `willEnterForeground` or
+`didBecomeActive` starts counting again from that moment.
+
+Upstream times every pass from `afterWaiting` to `beforeWaiting` regardless of
+app state. In Tennis Channel prod data, about half of all `device.hang` spans
+were the pass that takes the app out of the foreground (a system-only FrontBoard
+scene-update wait), and most of the rest of the long ones ran while the app was
+backgrounded (background audio, PiP, background launches). Two passes blocked
+when the user left were suspended mid-pass and reported as 40-minute and 3.8-hour
+hangs. None of these is visible to the user.
+
 ## Upgrading
 
 ```
@@ -57,5 +73,6 @@ Then point `apps/tc-mobile` at the new tag (project + workspace
 
 Drop a patch once upstream covers it: the KSCrash one when aws-otel-swift
 filters these reports or exposes KSCrash's monitor configuration, the URLSession
-one when it exposes `delegateClassesToInstrument` or stops scanning at `+load`.
+one when it exposes `delegateClassesToInstrument` or stops scanning at `+load`,
+the hang one when upstream stops counting time the app is not in the foreground.
 Switch `apps/tc-mobile` back to upstream when none are left.

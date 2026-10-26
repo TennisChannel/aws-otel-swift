@@ -137,6 +137,115 @@ final class AwsHangInstrumentationTests: XCTestCase {
     XCTAssertEqual(span.attributes["exception.stacktrace"]?.description, "No stack trace captured")
   }
 
+  // TC PATCH: only foreground time counts toward a hang. These drive the run loop and app-state
+  // handlers with fixed timestamps, so no stack is captured: the live watchdog would otherwise see
+  // a years-long hang, collect one, and move reportHang onto its async path.
+
+  private func exportedSpans() -> [SpanData] {
+    let expectation = XCTestExpectation(description: "Span export")
+    DispatchQueue.main.asyncAfter(deadline: .now() + 0.1) {
+      expectation.fulfill()
+    }
+    wait(for: [expectation], timeout: 1.0)
+    return spanExporter.getExportedSpans()
+  }
+
+  func testPassInForegroundReportsHang() {
+    mockStackTraceCollector.shouldReturnStackTrace = false
+    instrumentation.runLoopDidWake(at: 100.0)
+    instrumentation.runLoopWillSleep(at: 100.4)
+
+    let spans = exportedSpans()
+    XCTAssertEqual(spans.count, 1)
+    XCTAssertEqual(spans.first?.endTime.timeIntervalSince(spans.first!.startTime) ?? 0, 0.4, accuracy: 0.001)
+  }
+
+  func testLeavingForegroundAtStartOfPassDropsHang() {
+    mockStackTraceCollector.shouldReturnStackTrace = false
+    instrumentation.runLoopDidWake(at: 100.0)
+    instrumentation.appDidLeaveForeground(at: 100.01)
+    instrumentation.runLoopWillSleep(at: 100.5)
+
+    XCTAssertTrue(exportedSpans().isEmpty)
+  }
+
+  func testLeavingForegroundEndsHangAtThatMoment() {
+    mockStackTraceCollector.shouldReturnStackTrace = false
+    instrumentation.runLoopDidWake(at: 100.0)
+    instrumentation.appDidLeaveForeground(at: 100.3)
+    instrumentation.appDidLeaveForeground(at: 100.4) // didEnterBackground after willResignActive
+    instrumentation.runLoopWillSleep(at: 102.0)
+
+    let spans = exportedSpans()
+    XCTAssertEqual(spans.count, 1)
+    XCTAssertEqual(spans.first?.endTime.timeIntervalSince(spans.first!.startTime) ?? 0, 0.3, accuracy: 0.001)
+  }
+
+  func testPassStartedInBackgroundIsNotCounted() {
+    mockStackTraceCollector.shouldReturnStackTrace = false
+    instrumentation.appDidLeaveForeground(at: 99.0)
+    instrumentation.runLoopDidWake(at: 100.0)
+    instrumentation.checkForOngoingHang()
+    instrumentation.runLoopWillSleep(at: 120.0)
+
+    XCTAssertNil(instrumentation.rawStackTrace)
+    XCTAssertTrue(exportedSpans().isEmpty)
+  }
+
+  func testBecomingActiveCountsFromThatMoment() {
+    mockStackTraceCollector.shouldReturnStackTrace = false
+    instrumentation.appDidLeaveForeground(at: 99.0)
+    instrumentation.runLoopDidWake(at: 100.0)
+    instrumentation.appDidBecomeActive(at: 101.0)
+    instrumentation.runLoopWillSleep(at: 101.3)
+
+    let spans = exportedSpans()
+    XCTAssertEqual(spans.count, 1)
+    XCTAssertEqual(spans.first?.endTime.timeIntervalSince(spans.first!.startTime) ?? 0, 0.3, accuracy: 0.001)
+  }
+
+  func testBecomingActiveMidForegroundPassKeepsItsStart() {
+    mockStackTraceCollector.shouldReturnStackTrace = false
+    instrumentation.runLoopDidWake(at: 100.0) // launch: inactive is still the foreground
+    instrumentation.appDidBecomeActive(at: 100.2)
+    instrumentation.runLoopWillSleep(at: 100.4)
+
+    let spans = exportedSpans()
+    XCTAssertEqual(spans.count, 1)
+    XCTAssertEqual(spans.first?.endTime.timeIntervalSince(spans.first!.startTime) ?? 0, 0.4, accuracy: 0.001)
+  }
+
+  func testBriefTripOutWithinOnePassCountsOnlyTheLastForegroundStretch() {
+    mockStackTraceCollector.shouldReturnStackTrace = false
+    instrumentation.runLoopDidWake(at: 100.0)
+    instrumentation.appDidLeaveForeground(at: 100.2)
+    instrumentation.appDidBecomeActive(at: 100.5)
+    instrumentation.runLoopWillSleep(at: 100.6)
+
+    XCTAssertTrue(exportedSpans().isEmpty)
+  }
+
+  func testPassSuspendedWithoutLeavingCountsFromReturn() {
+    mockStackTraceCollector.shouldReturnStackTrace = false
+    instrumentation.runLoopDidWake(at: 100.0)
+    instrumentation.appWillEnterForeground(at: 2500.0)
+    instrumentation.appDidBecomeActive(at: 2500.1)
+    instrumentation.runLoopWillSleep(at: 2500.2)
+
+    XCTAssertTrue(exportedSpans().isEmpty)
+  }
+
+  func testForegroundResumesCountingOnNextPass() {
+    mockStackTraceCollector.shouldReturnStackTrace = false
+    instrumentation.appDidLeaveForeground(at: 99.0)
+    instrumentation.appDidBecomeActive(at: 99.5)
+    instrumentation.runLoopWillSleep(at: 99.6)
+    instrumentation.runLoopDidWake(at: 100.0)
+    instrumentation.runLoopWillSleep(at: 100.3)
+
+    XCTAssertEqual(exportedSpans().count, 1)
+  }
+
   func testSharedInstance() {
     let shared1 = AwsHangInstrumentation.shared
     let shared2 = AwsHangInstrumentation.shared
