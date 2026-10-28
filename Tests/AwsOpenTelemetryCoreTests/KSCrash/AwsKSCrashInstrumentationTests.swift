@@ -122,6 +122,67 @@ final class AwsKSCrashInstrumentationTests: XCTestCase {
     XCTAssertFalse(AwsKSCrashInstrumentation.isUnperceivedUnexplainedTermination([:]))
   }
 
+  // TC PATCH
+  private func hangReport(monitorId: String = "Watchdog", runID: String = "run-1", hang: [String: Any]? = nil) -> [String: Any] {
+    var error: [String: Any] = ["type": "signal", "signal": ["signal": 9], "mach": ["exception": 10]]
+    error["hang"] = hang
+    return [
+      "report": ["monitor_id": monitorId, "run_id": runID],
+      "crash": ["error": error]
+    ]
+  }
+
+  func testOrphanedHangReportIsThisRunsUnfinalizedWatchdogReport() {
+    XCTAssertTrue(AwsKSCrashInstrumentation.isOrphanedHangReport(hangReport(), currentRunID: "run-1"))
+  }
+
+  func testKeepsHangReportsFromEarlierRuns() {
+    XCTAssertFalse(AwsKSCrashInstrumentation.isOrphanedHangReport(hangReport(runID: "run-0"), currentRunID: "run-1"))
+  }
+
+  func testKeepsFinalizedHangReports() {
+    let finalized = hangReport(hang: ["hang_start_nanos": 1, "recovered": true])
+    XCTAssertFalse(AwsKSCrashInstrumentation.isOrphanedHangReport(finalized, currentRunID: "run-1"))
+  }
+
+  func testKeepsOtherMonitorsReports() {
+    for monitorId in ["Signal", "MachException", "NSException", "Termination"] {
+      XCTAssertFalse(AwsKSCrashInstrumentation.isOrphanedHangReport(hangReport(monitorId: monitorId), currentRunID: "run-1"), monitorId)
+    }
+    XCTAssertFalse(AwsKSCrashInstrumentation.isOrphanedHangReport([:], currentRunID: "run-1"))
+    XCTAssertFalse(AwsKSCrashInstrumentation.isOrphanedHangReport(["report": ["monitor_id": "Watchdog", "run_id": "run-1"]],
+                                                                  currentRunID: "run-1"))
+  }
+
+  func testHangPairCompletesOnSecondNotificationInEitherOrder() {
+    let pairs = HangNotificationPairs()
+    XCTAssertFalse(pairs.isSecond(.started, startTimestamp: 100))
+    XCTAssertFalse(pairs.isSecond(.updated, startTimestamp: 100))
+    XCTAssertTrue(pairs.isSecond(.ended, startTimestamp: 100))
+
+    XCTAssertFalse(pairs.isSecond(.ended, startTimestamp: 200))
+    XCTAssertTrue(pairs.isSecond(.started, startTimestamp: 200))
+  }
+
+  func testHangPairIgnoresRepeatsAndOtherHangs() {
+    let pairs = HangNotificationPairs()
+    XCTAssertFalse(pairs.isSecond(.started, startTimestamp: 100))
+    XCTAssertFalse(pairs.isSecond(.started, startTimestamp: 100))
+    XCTAssertFalse(pairs.isSecond(.ended, startTimestamp: 101))
+    XCTAssertFalse(pairs.isSecond(.updated, startTimestamp: 100))
+  }
+
+  func testHangPairDropsEarlierHangs() {
+    let pairs = HangNotificationPairs()
+    // A fatal-looking hang that never ended, then a hang that ended before its report was written.
+    XCTAssertFalse(pairs.isSecond(.started, startTimestamp: 100))
+    XCTAssertFalse(pairs.isSecond(.ended, startTimestamp: 200))
+    XCTAssertFalse(pairs.isSecond(.started, startTimestamp: 300))
+    // A late Ended for the first hang no longer pairs with anything.
+    XCTAssertFalse(pairs.isSecond(.ended, startTimestamp: 100))
+    XCTAssertTrue(pairs.isSecond(.ended, startTimestamp: 300))
+  }
+
   func testExtractCrashMessageWithExceptionType() {
     let stackTrace = """
     Exception Type:  EXC_BREAKPOINT (SIGTRAP)

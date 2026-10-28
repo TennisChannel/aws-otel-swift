@@ -44,6 +44,8 @@ public class AwsKSCrashInstrumentation: CrashProtocol {
   private static let logger = OpenTelemetry.instance.loggerProvider.get(instrumentationScopeName: AwsInstrumentationScopes.KSCRASH)
   static let reporter = KSCrash.shared
   static var observers: [NSObjectProtocol] = []
+  /// TC PATCH: see `observeHangReports`.
+  static let hangNotifications = HangNotificationPairs()
   private static let queue = DispatchQueue(label: AwsInstrumentationScopes.KSCRASH, qos: .utility)
   private static let timestampFormatter: ISO8601DateFormatter = {
     // Example KSCrash timestamp: `2025-10-28T03:30:53.604204Z`
@@ -84,6 +86,66 @@ public class AwsKSCrashInstrumentation: CrashProtocol {
 
     // setup cache context subscribers
     setupNotificationObservers()
+
+    observeHangReports()
+  }
+
+  /// TC PATCH. KSCrash 2.6's Watchdog monitor writes a fatal hang report (EXC_CRASH / SIGKILL / 0x8badf00d)
+  /// as soon as the main thread has been blocked for 250 ms, and deletes it when the hang ends, so only a
+  /// hang the process dies in reaches the next launch. If the hang ends while the watchdog thread is still
+  /// writing, the main thread clears the hang before the report's path is attached, and the watchdog thread
+  /// then discards the hang without deleting the file. The next launch sends it as a crash of a process
+  /// that kept running.
+  ///
+  /// KSCrash notifies Started (watchdog thread) and Ended (main thread) for every hang that ends, in either
+  /// order. When the second of the two arrives, KSCrash is done with that hang and no other hang report can
+  /// be in flight: the watchdog timer is either invalidated (Ended, inside the main run loop's BeforeWaiting
+  /// observer) or busy delivering this callback (Started). A Watchdog report from this run still on disk at
+  /// that point is the orphan. A fatal hang never gets an Ended, so its report is never touched.
+  static func observeHangReports() {
+    let token = kshang_addHangObserver({ change, startTimestamp, _, _ in
+      AwsKSCrashInstrumentation.hangDidChange(change, startTimestamp: startTimestamp)
+    }, nil)
+    if token == KSHangObserverTokenNotFound {
+      AwsInternalLogger.debug("AwsKSCrashInstrumentation could not observe hangs (watchdog monitor not running)")
+    }
+  }
+
+  static func hangDidChange(_ change: HangChangeType, startTimestamp: UInt64) {
+    guard hangNotifications.isSecond(change, startTimestamp: startTimestamp),
+          let reportStore = reporter.reportStore,
+          let runID = kscrash_getRunID() else {
+      return
+    }
+    // Listing the store is cheap and is usually empty; the IDs are taken now so a later hang's report,
+    // written after this callback returns, is never a candidate.
+    let reportIDs = reportStore.reportIDs.compactMap { ($0 as? NSNumber)?.int64Value }
+    guard !reportIDs.isEmpty else {
+      return
+    }
+    let currentRunID = String(cString: runID)
+    queue.async {
+      for id in reportIDs {
+        guard let crashReport = reportStore.report(for: id),
+              isOrphanedHangReport(crashReport.value, currentRunID: currentRunID) else {
+          continue
+        }
+        reportStore.deleteReport(with: id)
+        AwsInternalLogger.debug("AwsKSCrashInstrumentation deleted orphaned hang report \(id)")
+      }
+    }
+  }
+
+  /// TC PATCH: see `observeHangReports`. A report KSCrash finalized as a recovered hang carries a
+  /// `crash.error.hang` section and is never an orphan.
+  static func isOrphanedHangReport(_ rawCrash: [String: Any], currentRunID: String) -> Bool {
+    guard let report = rawCrash["report"] as? [String: Any],
+          report["monitor_id"] as? String == "Watchdog",
+          report["run_id"] as? String == currentRunID,
+          let error = (rawCrash["crash"] as? [String: Any])?["error"] as? [String: Any] else {
+      return false
+    }
+    return error["hang"] == nil
   }
 
   static func setupNotificationObservers() {
@@ -323,5 +385,34 @@ public class AwsKSCrashInstrumentation: CrashProtocol {
     // Confirms that original context was recovered, since this may not be obvious
     mutatedAttributes[AwsCrashSemConv.recoveredContext] = AttributeValue.bool(true)
     return mutatedAttributes
+  }
+}
+
+/// TC PATCH: pairs KSCrash's Started and Ended notifications for each hang, keyed by the hang's start
+/// timestamp. Called from the watchdog thread and the main thread.
+///
+/// A hang only starts once the previous one's notifications have all been delivered (the watchdog thread
+/// delivers Started, and a new hang needs both that thread and a fresh main run loop wake), so entries for
+/// earlier hangs are dropped when a later one is seen. That bounds the table to the current hang, including
+/// hangs that only ever get one notification: KSCrash skips Started when a hang ends before its report is
+/// written.
+final class HangNotificationPairs {
+  private let lock = NSLock()
+  private var seen: [UInt64: HangChangeType] = [:]
+
+  /// True when this is the second of the Started/Ended pair for the hang that started at `startTimestamp`.
+  func isSecond(_ change: HangChangeType, startTimestamp: UInt64) -> Bool {
+    guard change == .started || change == .ended else {
+      return false
+    }
+    lock.lock()
+    defer { lock.unlock() }
+    seen = seen.filter { $0.key >= startTimestamp }
+    if let first = seen[startTimestamp], first != change {
+      seen[startTimestamp] = nil
+      return true
+    }
+    seen[startTimestamp] = change
+    return false
   }
 }

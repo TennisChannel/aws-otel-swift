@@ -57,6 +57,29 @@ backgrounded (background audio, PiP, background launches). Two passes blocked
 when the user left were suspended mid-pass and reported as 40-minute and 3.8-hour
 hangs. None of these is visible to the user.
 
+## Patch: orphaned hang reports
+
+`AwsKSCrashInstrumentation` registers a KSCrash hang observer and deletes a
+Watchdog hang report that is still on disk after its hang ended, marked
+`TC PATCH`. Needs KSCrash 2.6, so `Package.swift` requires `2.6.0` or later.
+
+KSCrash's Watchdog monitor writes a fatal hang report (EXC_CRASH / SIGKILL /
+`0x8badf00d`) once the main thread has been blocked for 250 ms and deletes it
+when the hang ends. If the hang ends while the watchdog thread is still writing,
+the main thread clears the hang before the report's path is attached and the
+watchdog thread discards the hang without deleting the file
+(`populateReportForCurrentHang`, "hang changed during report population"). The
+next launch sends it as a crash of a process that kept running; its main thread
+is parked in KSCrash's own run loop observer, waiting on the monitor's lock.
+Tennis Channel prod saw two in 30 days, both followed by the same process
+carrying on.
+
+KSCrash notifies Started (watchdog thread) and Ended (main thread) for every
+hang that ends, in either order. At the second of the pair KSCrash is done with
+that hang and no other hang report can be in flight, so a Watchdog report from
+the current run without a stitched `crash.error.hang` section is the orphan. A
+hang the process dies in never gets an Ended and keeps its report.
+
 ## Upgrading
 
 ```
@@ -74,5 +97,6 @@ Then point `apps/tc-mobile` at the new tag (project + workspace
 Drop a patch once upstream covers it: the KSCrash one when aws-otel-swift
 filters these reports or exposes KSCrash's monitor configuration, the URLSession
 one when it exposes `delegateClassesToInstrument` or stops scanning at `+load`,
-the hang one when upstream stops counting time the app is not in the foreground.
+the hang one when upstream stops counting time the app is not in the foreground,
+the orphaned hang report one when KSCrash deletes the report it discards.
 Switch `apps/tc-mobile` back to upstream when none are left.
